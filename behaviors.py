@@ -51,6 +51,7 @@ class FindBall(RobotBehavior):
 
         # FindBall until higher priority occurs 
         while robot.isFindingBall:
+            self.turn_move_to_ball(robot)
             robot.run()
             robot.update_sensors()
 
@@ -62,11 +63,33 @@ class FindBall(RobotBehavior):
         robot.isFindingBall = False
         log(msg)
 
-    def recalibrate_front(self, robot) -> None:
-        """
-        Given that the robot ran into a wall,
-        backup the robot 200 mm and turn it .
-        """
-        random_angle = randint(ANGLE_LOW_BOUND, ANGLE_UPPER_BOUND)
-        robot.move(BACKUP_DISTANCE)
-        robot.turn(random_angle)
+    def turn_move_to_ball(self, robot):
+
+        max_val = 0
+        zone_val = 0
+
+        for i in robot.strengths:
+            if robot.strengths[i] > max_val:
+                max_val = robot.strengths[i]
+                zone_val = i
+
+        if zone_val == 0:
+            robot.turn(-120)
+            robot.move(80)
+
+        elif zone_val == 1:
+            robot.turn(-60)
+            robot.move(80)
+
+        elif zone_val == 2:
+            robot.move(80)
+
+        elif zone_val == 3:
+            robot.turn(60)
+            robot.move(80)
+
+        elif zone_val == 4:
+            robot.turn(120)
+            robot.move(80)
+
+        
