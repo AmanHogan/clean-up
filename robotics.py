@@ -7,7 +7,7 @@ from pybricks.parameters import Port, Stop, Direction, Color
 from globals import *
 from logger import log
 import heapq
-from behaviors import (RobotBehavior, TouchBehavior, FireDetection, WallFollowing, FindBall)
+from behaviors import (RobotBehavior, FindBall, HasBall)
 import math
 
 class Navigator:
@@ -46,17 +46,30 @@ class Robot:
 
         self.distanceToWall = sonic.distance() # distance to wall [mm]
         self.current_color = color.color() # Color detected by Color Sensor
+        self.hasBall = False
         self.isFindingBall = False # True if Robot is finding Ball
         self.notInGoal = True # True if Ball not in our goal
 
-        self.ballDistace = int.from_bytes(self.isensor.read(0x42, length=1), "little")
+        self.mxSignal = max([int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)])
         self.strengths = [int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)]
 
-        self.homeColor = Color.RED
-        self.awayColor = Color.BLUE
-        self.middleColor = Color.GREEN
-        
 
+        self.inTeamGoal = True
+        self.onTeamSide = False
+        self.onOpponentSide = False
+        self.inOpponentGoal = False
+
+
+        self.teamColor = TEAM_COLOR
+        self.opponentColor = OPPONENT_COLOR
+        self.midfield = MIDFIELD
+        self.threshold = SIGNAL_THRESHOLD
+        self.currentSide = TEAM_COLOR
+        self.hasTurnedWithBall = False
+
+
+
+    
     def move(self, distance) -> None:
         """
         Moves robot a given distance in [mm]\n
@@ -97,6 +110,15 @@ class Robot:
         self.left_motor.run(TIRE_RPM)
         self.right_motor.run(TIRE_RPM)
 
+    def run_time(self, mseconds) -> None:
+        """
+        The motor accelerates to TIRE_RPM 
+        and keeps running at this speed 
+        until you give a new command.
+        """
+        self.left_motor.run_time(TIRE_RPM,mseconds)
+        self.right_motor.run_time(TIRE_RPM, mseconds)
+
     def stop(self) -> None:
         """
         Stops the motor and lets it spin freely.
@@ -130,8 +152,11 @@ class Robot:
         """
         self.distanceToWall = self.usensor.distance()
         self.current_color = self.csensor.color()
-        self.ballDistace = int.from_bytes(self.isensor.read(0x42, length=1), "little")
+        self.mxSignal = max([int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)])
         self.strengths = [int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)]
+
+        log("Signal Strengths {}".format(str(self.strengths)))
+        # log("Chose Zone {} with a value of {}".format(zone_val, max_val))
         
 
     def update_queue(self) -> None:
@@ -143,7 +168,7 @@ class Robot:
             if not any(isinstance(behavior, FindBall) for behavior in self.queue):
                 self.queue.append(FindBall())
 
-        if self.ballDistace > 90:
+        if self.mxSignal > SIGNAL_THRESHOLD:
            if not any(isinstance(behavior, HasBall) for behavior in self.queue):
-                self.queue.append(FireDetection())
+                self.queue.append(HasBall())
     
