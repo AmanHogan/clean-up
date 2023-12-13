@@ -1,13 +1,9 @@
 """responsible for coordinating the behaviors that the robot will take given the sensor data"""
 
-from random import randint
-import math
 from logger import log
 from globals import *
 from pybricks.parameters import Color
 import time
-
-
 
 class RobotBehavior:
     """Coordinates the behaviors of the Robot given the priority of the behavior"""
@@ -31,58 +27,13 @@ class RobotBehavior:
 
     def __lt__(self, other):
         return self.priority < other.priority
-    
-    def crossed_oponent_side(self, robot):
+
+    def recalibrate_position(self, robot):
         """
         If crossed opponents line, backup and turn\n
         Args: robot (Robot): robot
         """
-
-        log("FUNC: Moved accross opponent's line. Backing up. " + str(robot.current_color))
-        self.recalibrate_position(robot)
-    
-    def crossed_midline_side(self, robot):
-        """
-        If crossed middline, update the side that the robot thinks its on.\n
-        Args: robot (Robot): robot
-        """
-        if robot.onTeamSide == True:
-            log("FUNC: Crossed middleline. Went from TEAM SIDE to OPPONENT SIDE")
-            robot.onOpponentSide = True
-            robot.onTeamSide = False
-            robot.ev3.speaker.say("Went from team side to opponent side")
-            
-
-        elif robot.onOpponentSide == True:
-            log("FUNC: Crossed middleline. Went from OPPONENT SIDE to TEAM SIDE")
-            robot.onOpponentSide = False
-            robot.onTeamSide = True
-            robot.ev3.speaker.say("Went from opponent side to team side")
-
-        
-
-    def crossed_team_side(self, robot):
-        """
-        If crossed team's line, update boolean variables\n
-        Args: robot (Robot): robot
-        """
-        if robot.onTeamSide == True:
-            log("FUNC: Crossed Team Line. Went from TEAM SIDE to TEAM GOAL")
-            robot.inTeamGoal  = True
-            robot.onTeamSide = False
-            robot.ev3.speaker.say("Went from team side to team goal")
-
-
-        elif robot.inTeamGoal == True:
-            log("FUNC: Crossed Team Line. Went TEAM GOAL to TEAM SIDE")
-            robot.onTeamSide = True
-            robot.inTeamGoal = False
-            robot.ev3.speaker.say("Went from team goal to team side")
-
-
-        
-
-    def recalibrate_position(self, robot):
+        log("FUNC: Moved accross opponent's line. Backing up. ")
         robot.move(BACKUP_DISTANCE)
         robot.turn(TURN_ANGLE)
 
@@ -95,7 +46,6 @@ class FindBall(RobotBehavior):
     def __init__(self):
         super().__init__(1)
         self.start_time = time.time()
-        self.detectedColor = 0
         self.elapsedTime = time.time() - self.start_time
     
     def run(self, robot):
@@ -106,7 +56,7 @@ class FindBall(RobotBehavior):
         Robot tries to find the ball\n
         Args: robot (Robot): robot
         """
-        
+        robot.ev3.screen.load_image(robot.findingBallImage)
         robot.isFindingBall = True
         robot.run()
 
@@ -114,7 +64,6 @@ class FindBall(RobotBehavior):
         while robot.isFindingBall:
 
             robot.update_sensors()
-            
             turn_time = time.time() - self.start_time
             self.elapsedTime = time.time() - self.start_time
             
@@ -134,21 +83,11 @@ class FindBall(RobotBehavior):
 
             # passed opponent line
             if robot.current_color == OPPONENT_COLOR :
-                self.crossed_oponent_side(robot)
-                robot.move(60)
-                
-            # passed team line
-            if robot.current_color == TEAM_COLOR :
-                self.crossed_team_side(robot)
-                robot.move(60)
+                self.recalibrate_position(robot)
 
-            # passed middle line
-            if robot.current_color == MIDFIELD:
-                self.crossed_midline_side(robot)
-                robot.move(60)
-
-            if self.elapsedTime > 5:
-                self.elapsedTime = 0
+            # timeout time reached when finding ball
+            if self.elapsedTime > TIMEOUT_TIME:
+                self.start_time = 0
                 robot.turn(180)
                 
             robot.run()
@@ -162,7 +101,8 @@ class FindBall(RobotBehavior):
         """
         Robot finds the max strength signal from the IR Sensor that was stored in the
         strengths array. Robot turns in increments depending on the index of the max
-        strength in the strength array.
+        strength in the strength array.\n
+        Args:robot (Robot): robot
         """
         
         max_val, zone_val = max((val, i) for i, val in enumerate(robot.strengths))
@@ -184,33 +124,39 @@ class FindBall(RobotBehavior):
 
       
 class HasBall(RobotBehavior):
-    """
-    Behavior when the robot detects it has a ball. Priority of 0.
-    """
+    """Behavior when the robot detects it has a ball. Priority of 0."""
     def __init__(self):
         super().__init__(0)
+        self.startTime = time.time()
+        self.elapsedTime = time.time() - self.startTime
     
     def run(self, robot):
         self.has_ball(robot)
 
+
     def has_ball(self, robot):
         """
         Robot currently has the ball
-        Args: robot (Robor): robot
+        Args: robot (Robot): robot
         """
         robot.hasBall = True
-        robot.tireRPM = TIRE_RPM * 1.2
+        robot.tireRPM = TIRE_RPM * 1.5
+        robot.ev3.screen.load_image(robot.hasBallImage)
         robot.run()
-        timeout_start = time.time()
+        
 
         while robot.hasBall:
 
             robot.update_sensors()
-            if (timeout_start - time.time()) > 5:
+            self.elapsedTime = time.time() - self.startTime
+
+            # timeout time reached
+            if self.elapsedTime > TIMEOUT_TIME:
                 robot.turn(120)
+                self.startTime = 0
 
             # lost ball
-            if robot.mxSignal < SIGNAL_THRESHOLD :
+            if robot.mxSignal < SIGNAL_THRESHOLD - SIGNAL_THRESHOLD_RANGE:
                 self.stop_behavior(robot, "Robot Does not have Ball anymore")
 
             # near wall
@@ -219,28 +165,19 @@ class HasBall(RobotBehavior):
                 log("FUNC: Very close to wall... Aligning self with wall")
                 
             # on team side with ball
-            if robot.onTeamSide == True or robot.inTeamGoal == True:
-                robot.turn(TURN_ANGLE)
+            if robot.orientation  < 0:
+                # Calculate the turn angle to orient towards 90 degrees
+                turn_angle = 90 - robot.orientation
+                robot.turn(turn_angle)
                 log("FUNC: We have the ball, but we are on our own side or in own goal. Turn around.")
 
             # on opponents side with ball
-            if robot.onOpponentSide == True:
-                log("FUNC: We have the ball, and are on the opponent's side. Make a break for it!")
+            if robot.orientation  > 0:
+                log("FUNC: We have the ball and moving towards opponent's goal!")
                 
             # passes oponents line
             if robot.current_color == OPPONENT_COLOR :
-                self.crossed_oponent_side(robot)
-                robot.move(60)
-
-            # passes team line
-            if robot.current_color == TEAM_COLOR :
-                self.crossed_team_side(robot)
-                robot.move(60)
-
-            # passes middle line
-            if robot.current_color == MIDFIELD:
-                self.crossed_midline_side(robot)
-                robot.move(60)
+                self.recalibrate_position(robot)
               
             robot.run()
 

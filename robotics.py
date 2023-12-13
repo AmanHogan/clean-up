@@ -1,43 +1,42 @@
-"""Acts as a replacement for pybricks robotics module. Module is
-responsible for moving the robot, angle tracking, and robot behavior proccesing"""
+"""Acts as a replacement for pybricks robotics module. Module is responsible for moving the robot, angle tracking, and robot behavior proccesing"""
 
 from pybricks.hubs import EV3Brick
-from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor, UltrasonicSensor)
-from pybricks.parameters import Port, Stop, Direction, Color, ImageFile
+from pybricks.ev3devices import (Motor, ColorSensor, UltrasonicSensor, GyroSensor)
+from pybricks.parameters import Port, Stop, Direction, Color
 from globals import *
 from logger import log
 import heapq
 from behaviors import (RobotBehavior, FindBall, HasBall)
+from pybricks.media.ev3dev import SoundFile, ImageFile, Image
 import math
 
-#!/usr/bin/env pybricks-micropython
-from pybricks.hubs import EV3Brick
-from globals import *
-from logger import log
-
 class Navigator:
-    """Class responsible for keeping track of the robot's logical orientation
-    """
+    """Class responsible for keeping track of the robot's orientation"""
 
-    def __init__(self):
-        self.orientation = 0 # orientation [deg]
+    def __init__(self, gyroSensor: GyroSensor):
+        self.gyro = gyroSensor # gyro sensor
+        self.gyro.reset_angle(INIT_ORIENTATION) # setting initial angle of gyro
+        self.orientation = self.normalize_angle(self.gyro.angle()) # orientation of robot [deg]
         log("INFO: Current Robot Orientation: " + str(self.orientation) + " degrees...")
 
-    def update_nav(self, angle) -> None:
+    def normalize_angle(self, angle):
         """
-        Updates the logical orientation of the robot and keeps track of previous positions\n
-        Args: angle (int): angle that the robot needs to be be turned by
+        Normalizes the angle given into a range of [-180, 180) degrees
+        Args: angle (int): orientation given by gyroscope
+        Returns: int : robot orientation in range [-180, 180) degrees
         """
-        self.orientation = (self.orientation + angle) % 360
-        
+
+        normalized_angle = angle % 360  # Wrap the angle to [0, 360)
+        if normalized_angle > 180:
+            normalized_angle -= 360  # Convert to the range of [-180, 180)
+        return normalized_angle
 
 class Robot:
     """
     Custom defined Robot class for the lego ev3 robot. Responsible for moving, turning, and 
     updating the priority queue of the robot.
     """
-    def __init__(self, left_motor: Motor, right_motor: Motor, navigator: Navigator, 
-                 color: ColorSensor, sonic: UltrasonicSensor, infrared, ev3):
+    def __init__(self, left_motor: Motor, right_motor: Motor, navigator: Navigator, color: ColorSensor, sonic: UltrasonicSensor, infrared, ev3):
         
         self.left_motor = left_motor # controls left tire
         self.right_motor = right_motor # controls right tire
@@ -46,12 +45,11 @@ class Robot:
         self.usensor = sonic # ultrasonic sensor
         self.isensor = infrared # IR sensor
 
-        self.opponentImage = ImageFile.DECLINE
-        self.teamImage = ImageFile.ACCEPT
-
+        # Images displayed when finding ball or when it has found a ball
+        self.hasBallImage = Image(ImageFile.ANGRY)
+        self.findingBallImage = Image(ImageFile.PINCHED_MIDDLE)
 
         self.tireRPM = TIRE_RPM
-
         self.queue = [] # priority queue
         heapq.heapify(self.queue)
 
@@ -67,12 +65,6 @@ class Robot:
         # list of strengths from IR sensor of zones 1,3,5,7 and 9
         self.strengths = [int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)]
 
-        # Boolean vars for knowing which side the robot is on
-        self.inTeamGoal = True
-        self.onTeamSide = False
-        self.onOpponentSide = False
-        self.inOpponentGoal = False
-
         self.ev3 = ev3
         
     def move(self, distance) -> None:
@@ -80,11 +72,9 @@ class Robot:
         Moves robot a given distance in [mm]\n
         Args: distance (float): Distance to be traveled [mm]
         """
-
-        # tire rotation angle
         angle =  (((distance)/TIRE_CIRC)*FULL_ROTATION)*DISTANCE_ERROR 
-        self.left_motor. run_angle(TIRE_RPM, angle, wait=False)
-        self.right_motor.run_angle(TIRE_RPM, angle)
+        self.left_motor. run_angle(self.tireRPM, angle, wait=False)
+        self.right_motor.run_angle(self.tireRPM, angle)
         log("Robot Moved: " + str(distance) + " milimeters...")
 
     def turn(self, angle) -> None:
@@ -95,16 +85,13 @@ class Robot:
 
         # Calculate steering angle
         steering_angle =  (((2*M_PI*ROBOT_RADIUS*(angle/360))/TIRE_CIRC)*FULL_ROTATION)*TURN_ERROR
-        log("INFO: Robot supposed to turn: " + str(angle) + " degrees...")
+        log("INFO: Calculated Angle to turn: " + str(angle) + " degrees...")
 
-    
         # Turn Tires
-        self.left_motor. run_angle(TIRE_RPM, -(steering_angle), wait=False)
-        self.right_motor.run_angle(TIRE_RPM, (steering_angle))
-        self.navigator.update_nav(steering_angle)
-            
-        log("INFO: Current Robot Orientation: " + str(self.navigator.orientation) + " degrees...")
+        self.left_motor. run_angle(self.tireRPM, -(steering_angle), wait=False)
+        self.right_motor.run_angle(self.tireRPM, (steering_angle))
         self.update_sensors()
+        log("INFO: Current Robot Orientation: " + str(self.orientation) + " degrees...")
         
     def run(self) -> None:
         """
@@ -112,17 +99,8 @@ class Robot:
         and keeps running at this speed 
         until you give a new command.
         """
-        self.left_motor.run(TIRE_RPM)
-        self.right_motor.run(TIRE_RPM)
-
-    def run_time(self, mseconds) -> None:
-        """
-        The motor accelerates to TIRE_RPM 
-        and keeps running at this speed 
-        until you give a new command.
-        """
-        self.left_motor.run_time(TIRE_RPM,mseconds)
-        self.right_motor.run_time(TIRE_RPM, mseconds)
+        self.left_motor.run(self.tireRPM)
+        self.right_motor.run(self.tireRPM)
 
     def stop(self) -> None:
         """
@@ -151,13 +129,12 @@ class Robot:
             log("BEHAVIOR ENDED: Find Ball")
 
     def update_sensors(self) -> None:
-        """Function updates all of the robot's sensor values and stores these values in the robot object
-        """
+        """Function updates all of the robot's sensor values and stores these values in the robot object"""
         self.distanceToWall = self.usensor.distance()
         self.current_color = self.csensor.color()
+        self.orientation = self.navigator.normalize_angle(self.navigator.gyro.angle()) 
         self.mxSignal = max([int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)])
         self.strengths = [int.from_bytes(self.isensor.read(0x43+i, length=1), "little") for i in range(5)]
-
         log("INFO: Signal Strengths {}".format(str(self.strengths)), True)
         
     def update_queue(self) -> None:
@@ -165,6 +142,7 @@ class Robot:
         Updates the priority queue using the robot's sensor values. Defaults to FindBall if
         priority queue is empty.
         """
+
         if not self.queue:
             if not any(isinstance(behavior, FindBall) for behavior in self.queue):
                 self.queue.append(FindBall())
